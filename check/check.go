@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"regexp"
