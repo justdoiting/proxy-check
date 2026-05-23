@@ -1,6 +1,6 @@
 # -----------进度显示-----------
 # 是否显示检测进度（终端）
-print-progress: false
+print-progress: true
 # 进度条显示模式:
 # "auto": 根据测活-测速-媒体检测的阶段权重自动显示
 # "stage": 每个阶段完成,显示下一阶段剩余任务
@@ -30,11 +30,11 @@ check-interval: 720
 # 测活-测速-媒体检测并行,缓冲通道占满后会成为瓶颈
 
 # 测活阶段，建议：10-1000
-alive-concurrent: 200
+alive-concurrent: 30
 # 测速阶段，建议：4-32
 speed-concurrent: 8
 # 媒体解锁检测，建议：10-200
-media-concurrent: 100
+media-concurrent: 20
 
 # 超时时间(毫秒)(节点的最大延迟)，主要影响测活任务
 timeout: 6000
@@ -46,7 +46,7 @@ concurrent: 20
 # 保存几个成功的节点，为0代表不限制
 # 如果你的并发数量超过这个参数，那么成功的结果可能会大于这个数值
 # success-limit <= success <= success-limit+concurrent
-success-limit: 200
+success-limit: 60
 
 # 此选项将保存并加载 {上次检测成功的节点} 和 {历次检测成功的节点}
 # 如果为true，则保留之前测试成功的节点
@@ -59,14 +59,14 @@ keep-success-proxies: true
 # 注意: 节点可能被测速测死(暂时或永久), 经过多次测试, 不用怀疑!
 # 强烈建议设置较低的 min-speed, 强烈建议保留 download-timeout 和 download-mb
 # 最低测速结果舍弃(KB/s)
-min-speed: 128
+min-speed: 1111
 # 下载测试时间(s)(与下载链接大小相关，默认最大测试10s)
 download-timeout: 10
 # 单节点测速下载数据大小(MB)限制，0为不限
-download-mb: 20
+download-mb: 30
 # 总下载速度速度限制(MB/s)，0为不限
 # 限制与实际情况可能会有一定误差
-total-speed-limit: 0
+total-speed-limit: 6
 
 # 测速地址(注意 并发数*节点速度<最大网速 否则测速结果不准确)
 # 尽量不要使用Speedtest，Cloudflare提供的下载链接，因为很多节点屏蔽测速网站
@@ -76,7 +76,7 @@ total-speed-limit: 0
 # (留空关闭测速，如节点数量少，网络环境差，请确保测速功能关闭)
 # 建议在深夜、早上、下午等空闲时段检测，避开网络拥堵的晚高峰
 # 出口水管就那么大，运营商只能优先保障直播、影视和游戏之类的正常流量
-speed-test-url: ""
+speed-test-url: "https://github.com/ClashrAuto/Clashr-Auto-Desktop/releases/download/v2.5.7/Clash.Auto-amd64-2.5.7-win.zip"
 
 # 相似度阈值(Threshold)大致对应网段
 # 1.00 /32（完全相同 IP）
@@ -84,7 +84,7 @@ speed-test-url: ""
 # 0.50 /16（前两段相同）
 # 0.25 /8（第一段相同）
 # 以下设置仅能 [减少] 节点被测速测死的概率, 无法避免被 "反代机房" 中断节点
-threshold: 0.75
+threshold: 0.25
 
 # -----------版本更新-----------
 # 是否开启新版本更新
@@ -93,7 +93,7 @@ threshold: 0.75
 # true: 自动更新; false: 不更新(默认启动时检测更新)
 update: false
 # 启动时检查更新版本
-update-on-startup: true
+update-on-startup: false
 # 是否启用定时检查更新，默认关闭，仅在启动时进行一次检查
 enable-cron-check: false
 # 定时检查更新
@@ -194,14 +194,25 @@ node-prefix: ""
 
 # 只测试指定协议的节点
 node-type:
-  # - ss
-  # - vmess
-  # - vless
+   - ss
+   - vmess
+   - vless
+   - ssr
+   - trojan
+   - hysteria
+   - hysteria2
+   - tuic
+   - mieru
+   - anytls
+   - masque
+   - sudoku
+   - tailscale
+   - trusttunnel
 
 # 是否丢弃无法访问 cloudflare 的节点(可正常访问Google等,默认保留,修改会导致可用节点急剧减少,且有大概率误杀)
 # true: 丢弃
 # false: 保留
-drop-bad-cf-nodes: false
+drop-bad-cf-nodes: true
 
 # 检测 isp 类型，比如: [原生|住宅]、[广播|机房]
 # 默认关闭，设置为 true 开启
@@ -246,7 +257,7 @@ callback-script: ""
 # 填写搭建的apprise API server 地址
 # 示例：https://notify.xxxx.us.kg/notify
 # 内置apprise服务，不想搭建仅需填写 recipient-url 即可
-apprise-api-server: "https://apprise.linkpc.dpdns.org/notify"
+apprise-api-server: ""
 # 通知渠道
 # 支持100+ 个通知渠道，详细格式请参照 https://github.com/caronc/apprise
 # 格式参考：
@@ -351,7 +362,7 @@ sub-urls-timeout: 10
 success-rate: 0
 # 统计订阅链接有效性和成功率
 # 为 true 会在 ./output/stats/ 生成订阅链接统计，每个订阅节点数量，可用节点数量，成功率
-sub-urls-stats: false
+sub-urls-stats: true
 
 # 远程订阅清单地址；用于集中维护多个订阅链接，避免频繁修改本地文件
 # 支持两种格式：
@@ -398,6 +409,7 @@ sub-urls:
   - "https://clashbest.github.io/uploads/{Y}/{mm}/2-{Ymd}.yaml"
   - "https://clashbest.github.io/uploads/{Y}/{mm}/3-{Ymd}.yaml"
   - "https://clashbest.github.io/uploads/{Y}/{mm}/4-{Ymd}.yaml"
+  - "https://raw.githubusercontent.com/whoahaow/rjsxrd/refs/heads/main/githubmirror/default/all-1.txt"
   - "https://raw.githubusercontent.com/firefoxmmx2/v2rayshare_subcription/main/subscription/clash_sub.yaml"
   - "https://raw.githubusercontent.com/Q3dlaXpoaQ/V2rayN_Clash_Node_Getter/main/APIs/sc0.yaml"
   - "https://raw.githubusercontent.com/xiaoji235/airport-free/main/clash/naidounode.txt"
@@ -417,9 +429,7 @@ sub-urls:
   - "https://raw.githubusercontent.com/go4sharing/sub/main/sub.yaml"
   - "https://raw.githubusercontent.com/actionsfz/v2ray/master/all.yaml"
   - "https://raw.githubusercontent.com/Pawdroid/Free-servers/main/sub"
-  - "https://raw.githubusercontent.com/aiboboxx/v2rayfree/main/v2"
   - "https://raw.githubusercontent.com/acymz/AutoVPN/main/data/V2.txt"
-  - "https://raw.githubusercontent.com/ggborr/FREEE-VPN/main/6V2ray"
   - "https://raw.githubusercontent.com/Barabama/FreeNodes/main/nodes/wenode.txt"
   - "https://raw.githubusercontent.com/Barabama/FreeNodes/main/nodes/v2rayshare.txt"
   - "https://raw.githubusercontent.com/Barabama/FreeNodes/main/nodes/nodefree.txt"
@@ -429,11 +439,9 @@ sub-urls:
   - "https://raw.githubusercontent.com/xiaoji235/airport-free/main/v2ray.txt"
   - "https://raw.githubusercontent.com/ts-sf/fly/main/clash"
   - "https://raw.githubusercontent.com/mheidari98/.proxy/main/all"
-  - "https://raw.githubusercontent.com/aiboboxx/clashfree/main/clash.yml"
   - "https://raw.githubusercontent.com/NiceVPN123/NiceVPN/main/Clash.yaml"
   - "https://raw.githubusercontent.com/ALIILAPRO/v2rayNG-Config/main/sub.txt"
   - "https://raw.githubusercontent.com/PangTouY00/Auto_proxy/main/Long_term_subscription_num"
   - "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/sub_merge_yaml.yml"
   - "https://raw.githubusercontent.com/Misaka-blog/chromego_merge/main/sub/merged_proxies_new.yaml"
-  - "https://raw.githubusercontent.com/MrMohebi/xray-proxy-grabber-telegram/master/collected-proxies/clash-meta/all.yaml"
   
