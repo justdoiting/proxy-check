@@ -489,7 +489,7 @@ func FetchSubsData(rawURL string) ([]byte, error) {
 	// UA 列表池
 	var uaList = []string{
 		convert.RandUserAgent(),
-		"mihomo/1.18.3",
+		"mihomo/1.19.25",
 		"clash.meta",
 		"curl/8.16.0",
 	}
