@@ -103,6 +103,19 @@ func newDefaultSub(data []byte) sub {
 				Type:     "Quick Setting Operator",
 				Disabled: false,
 			},
+			// 👇 现场声明匿名结构体类型并赋值，彻底绕过一切未定义类型名
+			{
+				Type: "Script Operator",
+				Args: struct {
+					Content   string    `json:"content"`
+					Mode      string    `json:"mode"`
+					Arguments Arguments `json:"arguments,omitempty"`
+				}{
+					Content: WarpURL("https://raw.githubusercontent.com/Keywos/rule/main/rename.js#one=true&flag=true&clear=true", IsGithubProxy),
+					Mode:    "link",
+				},
+				Disabled: false,
+			},
 		},
 	}
 }
@@ -111,7 +124,7 @@ func newDefaultSub(data []byte) sub {
 func newMihomoFile() file {
 	overwriteURL := config.GlobalConfig.MihomoOverwriteURL
 	if overwriteURL == "" {
-		overwriteURL = "http://127.0.0.1:8199/ACL4SSR_Online_Full.yaml" // 默认值
+		overwriteURL = "https://raw.githubusercontent.com/justdoiting/clash-rule/refs/heads/main/000.yaml" // 默认值
 	}
 	return file{
 		Name:        MihomoName,
