@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"math"
-	"math/rand/v2"
 	"net"
 	"net/http"
 	"regexp"
@@ -244,18 +243,17 @@ func Check() ([]Result, error) {
 	headSize := subWasSuccedLength + historyLength
 	if len(proxies) > headSize {
 		// 假设有 15 个相似的ip
-		calcMinSpacing := max(config.GlobalConfig.Concurrent*5, len(proxies)/15)
+		calcMinSpacing := max(config.GlobalConfig.Concurrent*10, len(proxies)/15)
 
 		// 随机乱序并根据 server 字段打乱节点顺序, 减少测速直接测死的概率
 		cfg := proxyutils.ShuffleConfig{
 			Threshold:  float64(config.GlobalConfig.Threshold), // CIDR/24 相同, 避免在一组(0.5: CIDR/16)
-			Passes:     3,                                      // 改善轮数（1~3）
+			Passes:     5,                                      // 改善轮数（1~3）
 			MinSpacing: calcMinSpacing,                         // CIDR/24 相同, 设置最小间隔
-			ScanLimit:  config.GlobalConfig.Concurrent * 2,     // 冲突向前扫描的最大距离
+			ScanLimit:  calcMinSpacing * 2,     // 冲突向前扫描的最大距离
 		}
 
-		tail := proxies[headSize:]
-		proxyutils.SmartShuffleByServer(tail, cfg)
+		proxyutils.SmartShuffleByServer(proxies, cfg)
 
 		cidr := proxyutils.ThresholdToCIDR(cfg.Threshold)
 		slog.Info(fmt.Sprintf("节点乱序, 相同 CIDR%s 最小间距: %d", cidr, cfg.MinSpacing))
