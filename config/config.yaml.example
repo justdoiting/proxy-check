@@ -30,7 +30,7 @@ check-interval: 720
 # 测活-测速-媒体检测并行,缓冲通道占满后会成为瓶颈
 
 # 测活阶段，建议：10-1000
-alive-concurrent: 30
+alive-concurrent: 50
 # 测速阶段，建议：4-32
 speed-concurrent: 8
 # 媒体解锁检测，建议：10-200
