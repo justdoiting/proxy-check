@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"encoding/json"
-
 	"github.com/klauspost/compress/zstd"
 	"github.com/oschwald/maxminddb-golang/v2"
 	"github.com/sinspired/subs-check/config"
@@ -30,27 +29,45 @@ type githubRelease struct {
 	} `json:"assets"`
 }
 
-// OpenMaxMindDB 使用指定路径或默认路径打开 MaxMind 数据库
+// ==================== 原有功能保持不变 ====================
+
+// OpenMaxMindDB 使用指定路径或默认路径打开 MaxMind 数据库（国家库）
 func OpenMaxMindDB(dbPath string) (*maxminddb.Reader, error) {
 	if dbPath != "" {
 		return openDBWithArch(dbPath)
 	}
-	mmdbPath, err := resolveDBPath()
+	mmdbPath, err := resolveDBPath("GeoLite2-Country.mmdb")
 	if err != nil {
 		return nil, err
 	}
-
-	// 如果数据库不存在，先解压生成
 	if _, err := os.Stat(mmdbPath); os.IsNotExist(err) {
 		if err := decompressEmbeddedMMDB(mmdbPath); err != nil {
 			return nil, err
 		}
 	}
+	return openDBWithArch(mmdbPath)
+}
+
+// 新增：打开 ASN 数据库
+func OpenASNDB(customPath string) (*maxminddb.Reader, error) {
+	if customPath != "" {
+		return openDBWithArch(customPath)
+	}
+
+	// 默认路径
+	mmdbPath, err := resolveDBPath("GeoLite2-ASN.mmdb")
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := os.Stat(mmdbPath); os.IsNotExist(err) {
+		slog.Warn("GeoLite2-ASN.mmdb 不存在，请手动下载后放到以下路径：", "path", mmdbPath)
+		return nil, errors.New("ASN数据库不存在")
+	}
 
 	return openDBWithArch(mmdbPath)
 }
 
-// 根据 GOARCH 选择合适的打开方式
 func openDBWithArch(path string) (*maxminddb.Reader, error) {
 	if runtime.GOARCH == "386" {
 		return openFromBytes(path)
@@ -62,12 +79,10 @@ func openDBWithArch(path string) (*maxminddb.Reader, error) {
 	return db, nil
 }
 
-// 解压内置的 MaxMind 数据库到指定路径
 func decompressEmbeddedMMDB(targetPath string) error {
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
 		return fmt.Errorf("创建数据库目录失败: %w", err)
 	}
-
 	zstdDecoder, err := zstd.NewReader(nil)
 	if err != nil {
 		return fmt.Errorf("zstd解码器创建失败: %w", err)
@@ -84,49 +99,36 @@ func decompressEmbeddedMMDB(targetPath string) error {
 	if _, err := io.Copy(file, zstdDecoder); err != nil {
 		return fmt.Errorf("maxmind数据库文件解压失败: %w", err)
 	}
-
 	return nil
 }
 
-// 解析数据库存放路径
-func resolveDBPath() (string, error) {
+func resolveDBPath(filename string) (string, error) {
 	saver, err := method.NewLocalSaver()
 	if err != nil {
 		return "", err
 	}
-
 	if !filepath.IsAbs(saver.OutputPath) {
 		saver.OutputPath = filepath.Join(saver.BasePath, saver.OutputPath)
 	}
-
 	if err := os.MkdirAll(saver.OutputPath, 0755); err != nil {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("无法获取当前工作目录: %w", err)
-		}
+		cwd, _ := os.Getwd()
 		saver.OutputPath = filepath.Join(cwd, "output")
-		if err := os.MkdirAll(saver.OutputPath, 0755); err != nil {
-			return "", fmt.Errorf("无法创建输出目录: %w", err)
-		}
+		os.MkdirAll(saver.OutputPath, 0755)
 	}
 
 	maxminddbDir := filepath.Join(saver.OutputPath, "MaxMindData")
-
 	if err := os.MkdirAll(maxminddbDir, 0755); err != nil {
 		return "", fmt.Errorf("无法创建 MaxMind 输出目录: %w", err)
 	}
-	return filepath.Join(maxminddbDir, "GeoLite2-Country.mmdb"), nil
+	return filepath.Join(maxminddbDir, filename), nil
 }
 
-// 32 位程序使用从内存读取的方式
 func openFromBytes(path string) (*maxminddb.Reader, error) {
-	runtime.GC() // 释放内存
-
+	runtime.GC()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("读取文件到内存失败: %w", err)
 	}
-
 	reader, err := maxminddb.OpenBytes(data)
 	if err != nil {
 		return nil, fmt.Errorf("从字节数组创建reader失败: %w", err)
