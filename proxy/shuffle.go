@@ -59,14 +59,16 @@ func SmartShuffleByServer(items []map[string]any, cfg ShuffleConfig) {
 				key = "v6-" + ip.Mask(net.CIDRMask(64, 128)).String()
 			}
 
-			// 解析 ASN 并加入 key（严格适配 v2 的 netip.Addr 与 Lookup 接口）
+			// 解析 ASN 并加入 key（严格适配 v2 的 netip.Addr）
 			if asnDB != nil {
 				if addr, err := netip.ParseAddr(serverStr); err == nil {
 					var record struct {
 						ASN uint32 `maxminddb:"autonomous_system_number"`
 					}
-					// v2 正确用法：第一个参数是 netip.Addr，第二个参数是结构体指针，只返回一个 error
-					if err := asnDB.Lookup(addr, &record); err == nil && record.ASN != 0 {
+					// maxminddb/v2 正确解法：Lookup 仅返回 1 个 maxminddb.Result 对象
+					res := asnDB.Lookup(addr)
+					// 通过 Decode 传入指针解包，并在此处捕获和判断 error
+					if err := res.Decode(&record); err == nil && record.ASN != 0 {
 						key += fmt.Sprintf("|as%d", record.ASN)
 					}
 				}
@@ -212,14 +214,15 @@ func parseServerMeta(s string) serverMeta {
 			m.prefixOK = true
 		}
 
-		// ASN 解析（严格适配 v2 的 netip.Addr 与 Lookup 接口）
+		// ASN 解析（严格适配 v2 的 netip.Addr）
 		if asnDB != nil {
 			if addr, err := netip.ParseAddr(s); err == nil {
 				var record struct {
 					ASN uint32 `maxminddb:"autonomous_system_number"`
 				}
-				// v2 正确用法：第一个参数是 netip.Addr，第二个参数是结构体指针，只返回一个 error
-				if err := asnDB.Lookup(addr, &record); err == nil && record.ASN != 0 {
+				// maxminddb/v2 正确解法：将唯一返回的 Result 赋值给变量，再解包
+				res := asnDB.Lookup(addr)
+				if err := res.Decode(&record); err == nil && record.ASN != 0 {
 					m.asn = record.ASN
 					m.asnOK = true
 				}
