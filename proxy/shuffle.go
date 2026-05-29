@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
+	"net/netip"
 	"strings"
 
 	"github.com/oschwald/maxminddb-golang/v2"
@@ -58,14 +59,17 @@ func SmartShuffleByServer(items []map[string]any, cfg ShuffleConfig) {
 				key = "v6-" + ip.Mask(net.CIDRMask(64, 128)).String()
 			}
 
-			// 解析 ASN 并加入 key（适配 maxminddb v2）
+			// 解析 ASN 并加入 key（适配 v2）
 			if asnDB != nil {
-				var record struct {
-					ASN uint32 `maxminddb:"autonomous_system_number"`
-				}
-				if res, err := asnDB.Lookup(ip); err == nil {
-					if err := res.Decode(&record); err == nil && record.ASN != 0 {
-						key += fmt.Sprintf("|as%d", record.ASN)
+				if addr, ok := netip.AddrFromSlice(ip); ok {
+					var record struct {
+						ASN uint32 `maxminddb:"autonomous_system_number"`
+					}
+					res := asnDB.Lookup(addr)
+					if res.Err() == nil {
+						if err := res.Decode(&record); err == nil && record.ASN != 0 {
+							key += fmt.Sprintf("|as%d", record.ASN)
+						}
 					}
 				}
 			}
@@ -132,7 +136,6 @@ func SmartShuffleByServer(items []map[string]any, cfg ShuffleConfig) {
 		}
 	}
 
-	// 检查最小间距
 	checkSpacing := func(lastPos map[uint32]int, idx int, m serverMeta) bool {
 		if cfg.MinSpacing <= 0 || !m.prefixOK {
 			return true
@@ -211,15 +214,18 @@ func parseServerMeta(s string) serverMeta {
 			m.prefixOK = true
 		}
 
-		// ASN 解析（适配 maxminddb v2）
+		// ASN 解析（适配 v2）
 		if asnDB != nil {
-			var record struct {
-				ASN uint32 `maxminddb:"autonomous_system_number"`
-			}
-			if res, err := asnDB.Lookup(ip); err == nil {
-				if err := res.Decode(&record); err == nil && record.ASN != 0 {
-					m.asn = record.ASN
-					m.asnOK = true
+			if addr, ok := netip.AddrFromSlice(ip); ok {
+				var record struct {
+					ASN uint32 `maxminddb:"autonomous_system_number"`
+				}
+				res := asnDB.Lookup(addr)
+				if res.Err() == nil {
+					if err := res.Decode(&record); err == nil && record.ASN != 0 {
+						m.asn = record.ASN
+						m.asnOK = true
+					}
 				}
 			}
 		}
