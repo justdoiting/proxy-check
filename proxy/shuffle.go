@@ -5,7 +5,16 @@ import (
 	"math/rand/v2"
 	"net"
 	"strings"
+
+	"github.com/oschwald/maxminddb-golang/v2"
 )
+
+var asnDB *maxminddb.Reader
+
+// SetASNDB 设置 ASN 数据库
+func SetASNDB(db *maxminddb.Reader) {
+    asnDB = db
+}
 
 type ShuffleConfig struct {
 	Threshold  float64    // 相邻相似度阈值，IPv4 /24 ≈ 0.75
@@ -21,7 +30,17 @@ type serverMeta struct {
 	octets   [4]byte
 	prefix24 uint32
 	prefixOK bool
+	asn      uint32
+    asnOK    bool
 }
+
+// 在 buckets 循环之前，增加 meta 解析
+type serverMetaWithASN struct {
+    meta serverMeta
+    item map[string]any
+}
+
+var metas []serverMetaWithASN
 
 // SmartShuffleByServer 对 items 就地打乱，避免相邻相似，并尽量满足最小间距
 func SmartShuffleByServer(items []map[string]any, cfg ShuffleConfig) {
@@ -40,12 +59,30 @@ func SmartShuffleByServer(items []map[string]any, cfg ShuffleConfig) {
 		}
 		
 		key := serverStr
-		if ip := net.ParseIP(serverStr); ip != nil {
-			if ip4 := ip.To4(); ip4 != nil {
-				key = fmt.Sprintf("v4-%d.%d.%d", ip4[0], ip4[1], ip4[2])
-			} else {
-				key = "v6-" + ip.Mask(net.CIDRMask(64, 128)).String()
-			}
+        asnStr := ""
+
+        if ip := net.ParseIP(serverStr); ip != nil {
+           if ip4 := ip.To4(); ip4 != nil {
+           key = fmt.Sprintf("v4-%d.%d.%d", ip4[0], ip4[1], ip4[2])
+        } else {
+           key = "v6-" + ip.Mask(net.CIDRMask(64, 128)).String()
+        }
+
+      // 解析 ASN
+        if asnDB != nil {
+           var record struct {
+              ASN uint32 `maxminddb:"autonomous_system_number"`
+           }
+           if err := asnDB.Lookup(ip, &record); err == nil && record.ASN != 0 {
+               asnStr = fmt.Sprintf("as%d", record.ASN)
+        }
+    }
+}
+
+     // 把 ASN 也加入分桶 key，同一个 ASN 的会分到一起，然后后面再打散
+        if asnStr != "" {
+            key = key + "|" + asnStr
+}
 		} else if serverStr != "" {
 			parts := strings.Split(serverStr, ".")
 			if len(parts) > 2 {
