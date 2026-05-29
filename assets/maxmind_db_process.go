@@ -29,8 +29,6 @@ type githubRelease struct {
 	} `json:"assets"`
 }
 
-// ==================== 原有功能保持不变 ====================
-
 // OpenMaxMindDB 使用指定路径或默认路径打开 MaxMind 数据库（国家库）
 func OpenMaxMindDB(dbPath string) (*maxminddb.Reader, error) {
 	if dbPath != "" {
@@ -48,7 +46,7 @@ func OpenMaxMindDB(dbPath string) (*maxminddb.Reader, error) {
 	return openDBWithArch(mmdbPath)
 }
 
-// 新增：打开 ASN 数据库
+// OpenASNDB 打开 ASN 数据库（若不存在则自动在线下载）
 func OpenASNDB(customPath string) (*maxminddb.Reader, error) {
 	if customPath != "" {
 		return openDBWithArch(customPath)
@@ -60,9 +58,12 @@ func OpenASNDB(customPath string) (*maxminddb.Reader, error) {
 		return nil, err
 	}
 
+	// 如果不存在，直接触发自动下载
 	if _, err := os.Stat(mmdbPath); os.IsNotExist(err) {
-		slog.Warn("GeoLite2-ASN.mmdb 不存在，请手动下载后放到以下路径：", "path", mmdbPath)
-		return nil, errors.New("ASN数据库不存在")
+		slog.Warn("GeoLite2-ASN.mmdb 不存在，正在为您自动从云端下载...", "path", mmdbPath)
+		if err := UpdateGeoLite2DB(); err != nil {
+			return nil, fmt.Errorf("自动下载 ASN 数据库失败: %w", err)
+		}
 	}
 
 	return openDBWithArch(mmdbPath)
@@ -136,11 +137,15 @@ func openFromBytes(path string) (*maxminddb.Reader, error) {
 	return reader, nil
 }
 
-// UpdateGeoLite2DB 检查并更新 GeoLite2 数据库
+// UpdateGeoLite2DB 同时检查并更新 Country 库和 ASN 数据库
 func UpdateGeoLite2DB() error {
-	dbPath, err := resolveDBPath("GeoLite2-Country.mmdb")
+	countryPath, err := resolveDBPath("GeoLite2-Country.mmdb")
 	if err != nil {
-		return fmt.Errorf("解析数据库路径失败: %w", err)
+		return fmt.Errorf("解析国家库路径失败: %w", err)
+	}
+	asnPath, err := resolveDBPath("GeoLite2-ASN.mmdb")
+	if err != nil {
+		return fmt.Errorf("解析ASN库路径失败: %w", err)
 	}
 
 	apiURL := "https://api.github.com/repos/mojolabs-id/GeoLite2-Database/releases/latest"
@@ -160,33 +165,61 @@ func UpdateGeoLite2DB() error {
 		return fmt.Errorf("解析 release JSON 失败: %w", err)
 	}
 
-	var downloadURL string
+	var countryURL, asnURL string
 	isGhProxy := utils.GetGhProxy()
 	for _, asset := range rel.Assets {
 		if asset.Name == "GeoLite2-Country.mmdb" {
-			downloadURL = asset.BrowserDownloadURL
+			countryURL = asset.BrowserDownloadURL
 			if isGhProxy {
-				downloadURL = config.GlobalConfig.GithubProxy + asset.BrowserDownloadURL
+				countryURL = config.GlobalConfig.GithubProxy + asset.BrowserDownloadURL
 			}
-			break
+		}
+		if asset.Name == "GeoLite2-ASN.mmdb" {
+			asnURL = asset.BrowserDownloadURL
+			if isGhProxy {
+				asnURL = config.GlobalConfig.GithubProxy + asset.BrowserDownloadURL
+			}
 		}
 	}
-	if downloadURL == "" {
-		return errors.New("未找到 GeoLite2-Country.mmdb 下载地址")
+
+	// 1. 处理国家库更新
+	if countryURL != "" {
+		if err := safeDownload(countryURL, countryPath); err != nil {
+			slog.Error("GeoLite2-Country.mmdb 下载失败", "err", err)
+		} else {
+			slog.Info("GeoLite2-Country.mmdb 更新完成")
+		}
 	}
 
-	// 备份原文件
-	bakPath := dbPath + ".bak"
-	if _, err := os.Stat(dbPath); err == nil {
-		if err := os.Rename(dbPath, bakPath); err != nil {
+	// 2. 处理 ASN 库更新
+	if asnURL != "" {
+		if err := safeDownload(asnURL, asnPath); err != nil {
+			slog.Error("GeoLite2-ASN.mmdb 下载失败", "err", err)
+			return fmt.Errorf("ASN 库下载失败: %w", err)
+		} else {
+			slog.Info("GeoLite2-ASN.mmdb 更新完成")
+		}
+	} else {
+		return errors.New("云端未找到 GeoLite2-ASN.mmdb 下载地址")
+	}
+
+	version := rel.TagName
+	utils.SendNotifyGeoDBUpdate(version)
+	return nil
+}
+
+// 带备份和重试的安全下载辅助函数
+func safeDownload(url, path string) error {
+	bakPath := path + ".bak"
+	if _, err := os.Stat(path); err == nil {
+		if err := os.Rename(path, bakPath); err != nil {
 			return fmt.Errorf("备份原文件失败: %w", err)
 		}
 	}
 
-	// 下载（重试 3 次）
 	success := false
 	for i := range 3 {
-		if err := downloadFile(downloadURL, dbPath); err != nil {
+		if err := downloadFile(url, path); err != nil {
 			fmt.Printf("下载失败 (%d/3): %v\n", i+1, err)
 			time.Sleep(1 * time.Second)
 			continue
@@ -196,18 +229,13 @@ func UpdateGeoLite2DB() error {
 	}
 
 	if !success {
-		// 回退
 		if _, err := os.Stat(bakPath); err == nil {
-			_ = os.Rename(bakPath, dbPath)
+			_ = os.Rename(bakPath, path)
 		}
-		return errors.New("下载失败，已回退原文件")
+		return errors.New("多次尝试下载均失败，已回退原文件")
 	}
 
-	// 成功则删除备份
 	_ = os.Remove(bakPath)
-	slog.Info("GeoLite2-Country.mmdb 更新完成")
-	version := rel.TagName
-	utils.SendNotifyGeoDBUpdate(version)
 	return nil
 }
 
