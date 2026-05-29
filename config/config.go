@@ -68,7 +68,6 @@ type Config struct {
 	ISPCheck             bool     `yaml:"isp-check"`
 	MediaCheck           bool     `yaml:"media-check"`
 	Platforms            []string `yaml:"platforms"`
-	MaxMindDBPath        string   `yaml:"maxmind-db-path"`
 	DropBadCfNodes       bool     `yaml:"drop-bad-cf-nodes"`
 	EnhancedTag          bool     `yaml:"enhanced-tag"`
 	SuccessLimit         int32    `yaml:"success-limit"`
