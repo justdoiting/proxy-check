@@ -138,7 +138,7 @@ func openFromBytes(path string) (*maxminddb.Reader, error) {
 
 // UpdateGeoLite2DB 检查并更新 GeoLite2 数据库
 func UpdateGeoLite2DB() error {
-	dbPath, err := resolveDBPath()
+	dbPath, err := resolveDBPath("GeoLite2-Country.mmdb")
 	if err != nil {
 		return fmt.Errorf("解析数据库路径失败: %w", err)
 	}
