@@ -253,16 +253,15 @@ func Check() ([]Result, error) {
 			ScanLimit:  calcMinSpacing * 3,     // 冲突向前扫描的最大距离
 		}
 
-        // 加载 ASN 数据库
-    if config.GlobalConfig.MaxmindDBPath != "" {
-    if db, err := maxminddb.Open(config.GlobalConfig.MaxmindDBPath); err == nil {
-        proxyutils.SetASNDB(db)
-        defer db.Close()  // 注意 defer 的位置
-        slog.Info("已加载 ASN 数据库，用于节点打乱")
-    } else {
-        slog.Warn("加载 ASN 数据库失败，将只使用 IP 打乱", "error", err)
+        // 加载 ASN 数据库用于节点打乱
+        if config.GlobalConfig.MaxmindDBPath != "" {
+           if db, err := assets.OpenASNDB(config.GlobalConfig.MaxmindDBPath); err == nil {
+               proxyutils.SetASNDB(db)
+               slog.Info("✅ ASN 数据库已加载，用于智能打乱节点")
+       } else {
+           slog.Warn("⚠️ 加载 ASN 数据库失败，将只使用 IP 打乱", "error", err)
+       }
     }
-}
 		
 		proxyutils.SmartShuffleByServer(proxies, cfg)
 
