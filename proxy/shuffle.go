@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
+	"net/netip"
 	"strings"
 
 	"github.com/oschwald/maxminddb-golang/v2"
@@ -58,13 +59,16 @@ func SmartShuffleByServer(items []map[string]any, cfg ShuffleConfig) {
 				key = "v6-" + ip.Mask(net.CIDRMask(64, 128)).String()
 			}
 
-			// 解析 ASN 并加入 key（适配 v2）
+			// 解析 ASN 并加入 key（严格适配 v2 的 netip.Addr）
 			if asnDB != nil {
-				var record struct {
-					ASN uint32 `maxminddb:"autonomous_system_number"`
-				}
-				if err := asnDB.Lookup(ip, &record); err == nil && record.ASN != 0 {
-					key += fmt.Sprintf("|as%d", record.ASN)
+				if addr, err := netip.ParseAddr(serverStr); err == nil {
+					var record struct {
+						ASN uint32 `maxminddb:"autonomous_system_number"`
+					}
+					// v2 仅接收 1 个参数 (addr)，并直接把结果解包到 record，返回 1 个 err 值
+					if err := asnDB.Lookup(addr, &record); err == nil && record.ASN != 0 {
+						key += fmt.Sprintf("|as%d", record.ASN)
+					}
 				}
 			}
 		} else if serverStr != "" {
@@ -208,14 +212,16 @@ func parseServerMeta(s string) serverMeta {
 			m.prefixOK = true
 		}
 
-		// ASN 解析（适配 v2）
+		// ASN 解析（严格适配 v2 的 netip.Addr）
 		if asnDB != nil {
-			var record struct {
-				ASN uint32 `maxminddb:"autonomous_system_number"`
-			}
-			if err := asnDB.Lookup(ip, &record); err == nil && record.ASN != 0 {
-				m.asn = record.ASN
-				m.asnOK = true
+			if addr, err := netip.ParseAddr(s); err == nil {
+				var record struct {
+					ASN uint32 `maxminddb:"autonomous_system_number"`
+				}
+				if err := asnDB.Lookup(addr, &record); err == nil && record.ASN != 0 {
+					m.asn = record.ASN
+					m.asnOK = true
+				}
 			}
 		}
 	}
