@@ -13,15 +13,14 @@ var asnDB *maxminddb.Reader
 
 // SetASNDB 设置 ASN 数据库
 func SetASNDB(db *maxminddb.Reader) {
-    asnDB = db
+	asnDB = db
 }
 
 type ShuffleConfig struct {
-	Threshold  float64    // 相邻相似度阈值，IPv4 /24 ≈ 0.75
-	Passes     int        // 改善轮数（1~3）
-	MinSpacing int        // 同一 IPv4 /24 的最小间距；<=0 关闭
-	ScanLimit  int        // 冲突向前扫描的最大距离
-	Rand       *rand.Rand // 随机数，为空则使用 time.Now().UnixNano()
+	Threshold  float64     // 相邻相似度阈值，IPv4 /24 ≈ 0.75
+	Passes     int         // 改善轮数
+	MinSpacing int         // 同一 IPv4 /24 的最小间距
+	ScanLimit  int         // 冲突向前扫描的最大距离
 }
 
 type serverMeta struct {
@@ -31,16 +30,8 @@ type serverMeta struct {
 	prefix24 uint32
 	prefixOK bool
 	asn      uint32
-    asnOK    bool
+	asnOK    bool
 }
-
-// 在 buckets 循环之前，增加 meta 解析
-type serverMetaWithASN struct {
-    meta serverMeta
-    item map[string]any
-}
-
-var metas []serverMetaWithASN
 
 // SmartShuffleByServer 对 items 就地打乱，避免相邻相似，并尽量满足最小间距
 func SmartShuffleByServer(items []map[string]any, cfg ShuffleConfig) {
@@ -49,46 +40,41 @@ func SmartShuffleByServer(items []map[string]any, cfg ShuffleConfig) {
 		return
 	}
 
-	// ==================== 【强力接入：分桶交错编织优化】 ====================
-	// 先通过分桶将相同 C 段 IP 或相同主域名的节点彻底打散，解决大规模扎堆问题
+	// ==================== 分桶交错编织（支持 ASN） ====================
 	buckets := make(map[string][]map[string]any)
+
 	for i := range items {
 		var serverStr string
-		if s, _ := items[i]["server"].(string); s != "" {
+		if s, ok := items[i]["server"].(string); ok {
 			serverStr = strings.TrimSpace(s)
 		}
-		
+
 		key := serverStr
-        asnStr := ""
 
-        if ip := net.ParseIP(serverStr); ip != nil {
-           if ip4 := ip.To4(); ip4 != nil {
-           key = fmt.Sprintf("v4-%d.%d.%d", ip4[0], ip4[1], ip4[2])
-        } else {
-           key = "v6-" + ip.Mask(net.CIDRMask(64, 128)).String()
-        }
+		if ip := net.ParseIP(serverStr); ip != nil {
+			if ip4 := ip.To4(); ip4 != nil {
+				key = fmt.Sprintf("v4-%d.%d.%d", ip4[0], ip4[1], ip4[2])
+			} else {
+				key = "v6-" + ip.Mask(net.CIDRMask(64, 128)).String()
+			}
 
-      // 解析 ASN
-        if asnDB != nil {
-           var record struct {
-              ASN uint32 `maxminddb:"autonomous_system_number"`
-           }
-           if err := asnDB.Lookup(ip, &record); err == nil && record.ASN != 0 {
-               asnStr = fmt.Sprintf("as%d", record.ASN)
-        }
-    }
-}
-
-     // 把 ASN 也加入分桶 key，同一个 ASN 的会分到一起，然后后面再打散
-        if asnStr != "" {
-            key = key + "|" + asnStr
-}
+			// 解析 ASN 并加入 key
+			if asnDB != nil {
+				var record struct {
+					ASN uint32 `maxminddb:"autonomous_system_number"`
+				}
+				if err := asnDB.Lookup(ip, &record); err == nil && record.ASN != 0 {
+					key += fmt.Sprintf("|as%d", record.ASN)
+				}
+			}
 		} else if serverStr != "" {
+			// 域名处理
 			parts := strings.Split(serverStr, ".")
 			if len(parts) > 2 {
 				key = strings.Join(parts[len(parts)-2:], ".")
 			}
 		}
+
 		buckets[key] = append(buckets[key], items[i])
 	}
 
@@ -101,7 +87,7 @@ func SmartShuffleByServer(items []map[string]any, cfg ShuffleConfig) {
 
 	// 交错合并
 	type bucketInfo struct {
-		key   string
+		key  string
 		nodes []map[string]any
 	}
 	var activeBuckets []bucketInfo
@@ -122,10 +108,10 @@ func SmartShuffleByServer(items []map[string]any, cfg ShuffleConfig) {
 		}
 		activeBuckets = nextBuckets
 	}
-	copy(items, interleavedResult)
-	// ==================== 【分桶优化结束，进入原版微调流程】 ====================
 
-	// 默认参数
+	copy(items, interleavedResult)
+
+	// ==================== 原有微调逻辑 ====================
 	if cfg.Passes <= 0 {
 		cfg.Passes = 2
 	}
@@ -139,17 +125,17 @@ func SmartShuffleByServer(items []map[string]any, cfg ShuffleConfig) {
 	// 预解析服务器元数据
 	metas := make([]serverMeta, n)
 	for i := range items {
-		if s, _ := items[i]["server"].(string); s != "" {
+		if s, ok := items[i]["server"].(string); ok {
 			metas[i] = parseServerMeta(s)
 		}
 	}
 
-	// 检查最小间距的闭包函数
-	checkSpacing := func(lp map[uint32]int, idx int, m serverMeta) bool {
+	// 检查最小间距
+	checkSpacing := func(lastPos map[uint32]int, idx int, m serverMeta) bool {
 		if cfg.MinSpacing <= 0 || !m.prefixOK {
 			return true
 		}
-		if last, ok := lp[m.prefix24]; !ok || idx-last > cfg.MinSpacing {
+		if last, ok := lastPos[m.prefix24]; !ok || idx-last > cfg.MinSpacing {
 			return true
 		}
 		return false
@@ -158,7 +144,6 @@ func SmartShuffleByServer(items []map[string]any, cfg ShuffleConfig) {
 	for pass := 0; pass < cfg.Passes; pass++ {
 		changed := false
 		lastPos := make(map[uint32]int, 64)
-
 		if metas[0].prefixOK {
 			lastPos[metas[0].prefix24] = 0
 		}
@@ -167,7 +152,8 @@ func SmartShuffleByServer(items []map[string]any, cfg ShuffleConfig) {
 			m1, m2 := metas[i], metas[i+1]
 
 			conflict := similarity(m1, m2) >= cfg.Threshold ||
-				(cfg.MinSpacing > 0 && same24(m1, m2))
+				(cfg.MinSpacing > 0 && same24(m1, m2)) ||
+				sameASN(m1, m2) // 支持 ASN 冲突
 
 			if conflict {
 				bestJ, bestScore := -1, 2.0
@@ -178,26 +164,21 @@ func SmartShuffleByServer(items []map[string]any, cfg ShuffleConfig) {
 
 				for j := i + 2; j < searchEnd; j++ {
 					mj := metas[j]
-
 					if !checkSpacing(lastPos, i+1, mj) {
 						continue
 					}
-
 					score := similarity(m1, mj)
-
 					if score < cfg.Threshold {
 						swap(items, metas, i+1, j)
 						m2 = mj
 						changed = true
 						break
 					}
-
 					if score < bestScore {
 						bestScore, bestJ = score, j
 					}
 				}
 
-				// 修复原代码逻辑：只有当上面的完美 break 没触发时，才使用相对较好的兜底
 				if !changed && bestJ != -1 {
 					if checkSpacing(lastPos, i+1, metas[bestJ]) {
 						swap(items, metas, i+1, bestJ)
@@ -227,12 +208,27 @@ func parseServerMeta(s string) serverMeta {
 			m.prefix24 = uint32(ip4[0])<<24 | uint32(ip4[1])<<16 | uint32(ip4[2])<<8
 			m.prefixOK = true
 		}
+
+		// ASN 解析
+		if asnDB != nil {
+			var record struct {
+				ASN uint32 `maxminddb:"autonomous_system_number"`
+			}
+			if err := asnDB.Lookup(ip, &record); err == nil && record.ASN != 0 {
+				m.asn = record.ASN
+				m.asnOK = true
+			}
+		}
 	}
 	return m
 }
 
 func same24(a, b serverMeta) bool {
 	return a.prefixOK && b.prefixOK && a.prefix24 == b.prefix24
+}
+
+func sameASN(a, b serverMeta) bool {
+	return a.asnOK && b.asnOK && a.asn == b.asn
 }
 
 func similarity(a, b serverMeta) float64 {
@@ -247,6 +243,7 @@ func similarity(a, b serverMeta) float64 {
 		}
 		return float64(eq) / 4.0
 	}
+
 	na, nb := len(a.raw), len(b.raw)
 	if na == 0 || nb == 0 {
 		return 0
@@ -284,4 +281,18 @@ func ThresholdToCIDR(th float64) string {
 		}
 		return fmt.Sprintf("/%d", prefix)
 	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
