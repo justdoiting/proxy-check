@@ -254,8 +254,8 @@ func Check() ([]Result, error) {
 		}
 
 		// 加载 ASN 数据库用于节点打乱
-		if config.GlobalConfig.MaxmindDBPath != "" {
-			if db, asnErr := assets.OpenASNDB(config.GlobalConfig.MaxmindDBPath); asnErr == nil {
+		if config.GlobalConfig.MaxMindDBPath != "" {
+			if db, asnErr := assets.OpenASNDB(config.GlobalConfig.MaxMindDBPath); asnErr == nil {
 				proxyutils.SetASNDB(db)
 				slog.Info("✅ ASN 数据库已加载，用于智能打乱节点")
 				// 任务完成后记得在函数结束时释放资源
@@ -296,7 +296,7 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 	defer cancel()
 
 	// 如果 MaxMindDBPath 为空会自动使用 subs-check 内置数据库
-	geoDB, err := assets.OpenMaxMindDB(config.GlobalConfig.MaxmindDBPath)
+	geoDB, err := assets.OpenMaxMindDB(config.GlobalConfig.MaxMindDBPath)
 
 	if err != nil {
 		slog.Debug(fmt.Sprintf("打开 MaxMind 数据库失败: %v", err))
