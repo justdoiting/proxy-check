@@ -87,6 +87,7 @@ type Config struct {
 	CronCheckUpdate      string   `yaml:"cron-check-update"`
 	Prerelease           bool     `yaml:"prerelease"`
 	UpdateTimeout        int      `yaml:"update-timeout"`
+	MaxmindDBPath        string   `yaml:"maxmind-db-path" json:"maxmind-db-path"`
 
 	// 新增 singbox的ios版本停留在1.11，这里进行兼容
 	SingboxLatest SingBoxConfig `yaml:"singbox-latest"`
