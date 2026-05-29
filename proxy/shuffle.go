@@ -17,10 +17,10 @@ func SetASNDB(db *maxminddb.Reader) {
 }
 
 type ShuffleConfig struct {
-	Threshold  float64     // 相邻相似度阈值，IPv4 /24 ≈ 0.75
-	Passes     int         // 改善轮数
-	MinSpacing int         // 同一 IPv4 /24 的最小间距
-	ScanLimit  int         // 冲突向前扫描的最大距离
+	Threshold  float64 // 相邻相似度阈值，IPv4 /24 ≈ 0.75
+	Passes     int     // 改善轮数
+	MinSpacing int     // 同一 IPv4 /24 的最小间距
+	ScanLimit  int     // 冲突向前扫描的最大距离
 }
 
 type serverMeta struct {
@@ -58,13 +58,15 @@ func SmartShuffleByServer(items []map[string]any, cfg ShuffleConfig) {
 				key = "v6-" + ip.Mask(net.CIDRMask(64, 128)).String()
 			}
 
-			// 解析 ASN 并加入 key
+			// 解析 ASN 并加入 key（适配 maxminddb v2）
 			if asnDB != nil {
 				var record struct {
 					ASN uint32 `maxminddb:"autonomous_system_number"`
 				}
-				if err := asnDB.Lookup(ip, &record); err == nil && record.ASN != 0 {
-					key += fmt.Sprintf("|as%d", record.ASN)
+				if res, err := asnDB.Lookup(ip); err == nil {
+					if err := res.Decode(&record); err == nil && record.ASN != 0 {
+						key += fmt.Sprintf("|as%d", record.ASN)
+					}
 				}
 			}
 		} else if serverStr != "" {
@@ -87,7 +89,7 @@ func SmartShuffleByServer(items []map[string]any, cfg ShuffleConfig) {
 
 	// 交错合并
 	type bucketInfo struct {
-		key  string
+		key   string
 		nodes []map[string]any
 	}
 	var activeBuckets []bucketInfo
@@ -144,7 +146,7 @@ func SmartShuffleByServer(items []map[string]any, cfg ShuffleConfig) {
 	for pass := 0; pass < cfg.Passes; pass++ {
 		changed := false
 		lastPos := make(map[uint32]int, 64)
-		if metas[0].prefixOK {
+		if len(metas) > 0 && metas[0].prefixOK {
 			lastPos[metas[0].prefix24] = 0
 		}
 
@@ -153,7 +155,7 @@ func SmartShuffleByServer(items []map[string]any, cfg ShuffleConfig) {
 
 			conflict := similarity(m1, m2) >= cfg.Threshold ||
 				(cfg.MinSpacing > 0 && same24(m1, m2)) ||
-				sameASN(m1, m2) // 支持 ASN 冲突
+				sameASN(m1, m2)
 
 			if conflict {
 				bestJ, bestScore := -1, 2.0
@@ -209,14 +211,16 @@ func parseServerMeta(s string) serverMeta {
 			m.prefixOK = true
 		}
 
-		// ASN 解析
+		// ASN 解析（适配 maxminddb v2）
 		if asnDB != nil {
 			var record struct {
 				ASN uint32 `maxminddb:"autonomous_system_number"`
 			}
-			if err := asnDB.Lookup(ip, &record); err == nil && record.ASN != 0 {
-				m.asn = record.ASN
-				m.asnOK = true
+			if res, err := asnDB.Lookup(ip); err == nil {
+				if err := res.Decode(&record); err == nil && record.ASN != 0 {
+					m.asn = record.ASN
+					m.asnOK = true
+				}
 			}
 		}
 	}
