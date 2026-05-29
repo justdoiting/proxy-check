@@ -21,7 +21,7 @@ LDFLAGS := -s -w -X main.Version=$(VERSION) -X main.CurrentCommit=$(COMMIT)
 		build-all gen-win
 
 # 默认目标：整理代码并编译当前环境
-all: build
+all: windows-amd64
 
 # 默认构建：当前环境
 build:
