@@ -250,7 +250,7 @@ func Check() ([]Result, error) {
 			Threshold:  float64(config.GlobalConfig.Threshold), // CIDR/24 相同, 避免在一组(0.5: CIDR/16)
 			Passes:     5,                                      // 改善轮数（1~3）
 			MinSpacing: calcMinSpacing,                         // CIDR/24 相同, 设置最小间隔
-			ScanLimit:  calcMinSpacing * 2,     // 冲突向前扫描的最大距离
+			ScanLimit:  calcMinSpacing * 3,     // 冲突向前扫描的最大距离
 		}
 
         // 加载 ASN 数据库
@@ -295,7 +295,7 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 	defer cancel()
 
 	// 如果 MaxMindDBPath 为空会自动使用 subs-check 内置数据库
-	geoDB, err := assets.OpenMaxMindDB(config.GlobalConfig.MaxMindDBPath)
+	geoDB, err := assets.OpenMaxmindDB(config.GlobalConfig.MaxmindDBPath)
 
 	if err != nil {
 		slog.Debug(fmt.Sprintf("打开 MaxMind 数据库失败: %v", err))
