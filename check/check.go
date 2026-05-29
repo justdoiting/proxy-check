@@ -46,8 +46,8 @@ var (
 
 // 存储测速和流媒体检测开关状态
 var (
-	speedON        bool
-	mediaON        bool
+	speedON         bool
+	mediaON         bool
 	progressWeight ProgressWeight
 )
 
@@ -105,7 +105,7 @@ type ProxyJob struct {
 
 	Speed int
 
-	NeedCF         bool
+	NeedCF          bool
 	IsCfAccessible bool
 }
 
@@ -250,19 +250,21 @@ func Check() ([]Result, error) {
 			Threshold:  float64(config.GlobalConfig.Threshold), // CIDR/24 相同, 避免在一组(0.5: CIDR/16)
 			Passes:     5,                                      // 改善轮数（1~3）
 			MinSpacing: calcMinSpacing,                         // CIDR/24 相同, 设置最小间隔
-			ScanLimit:  calcMinSpacing * 3,     // 冲突向前扫描的最大距离
+			ScanLimit:  calcMinSpacing * 3,                     // 冲突向前扫描的最大距离
 		}
 
-        // 加载 ASN 数据库用于节点打乱
-        if config.GlobalConfig.MaxmindDBPath != "" {
-           if db, err := assets.OpenASNDB(config.GlobalConfig.MaxmindDBPath); err == nil {
-               proxyutils.SetASNDB(db)
-               slog.Info("✅ ASN 数据库已加载，用于智能打乱节点")
-       } else {
-           slog.Warn("⚠️ 加载 ASN 数据库失败，将只使用 IP 打乱", "error", err)
-       }
-    }
-		
+		// 加载 ASN 数据库用于节点打乱
+		if config.GlobalConfig.MaxmindDBPath != "" {
+			if db, asnErr := assets.OpenASNDB(config.GlobalConfig.MaxmindDBPath); asnErr == nil {
+				proxyutils.SetASNDB(db)
+				slog.Info("✅ ASN 数据库已加载，用于智能打乱节点")
+				// 任务完成后记得在函数结束时释放资源
+				defer db.Close()
+			} else {
+				slog.Warn("⚠️ 加载 ASN 数据库失败，将只使用 IP 打乱", "error", asnErr)
+			}
+		}
+
 		proxyutils.SmartShuffleByServer(proxies, cfg)
 
 		cidr := proxyutils.ThresholdToCIDR(cfg.Threshold)
@@ -294,7 +296,7 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 	defer cancel()
 
 	// 如果 MaxMindDBPath 为空会自动使用 subs-check 内置数据库
-	geoDB, err := assets.OpenMaxmindDB(config.GlobalConfig.MaxmindDBPath)
+	geoDB, err := assets.OpenMaxMindDB(config.GlobalConfig.MaxmindDBPath)
 
 	if err != nil {
 		slog.Debug(fmt.Sprintf("打开 MaxMind 数据库失败: %v", err))
@@ -743,7 +745,7 @@ func (pc *ProxyChecker) runMediaStageAndCollect(db *maxminddb.Reader, ctx contex
 		})
 	}
 
-	// 等待所有 worker 完成，再关闭 pc.resultChan，让 collector 退出
+	// 等待所有 worker完成，再关闭 pc.resultChan，让 collector 退出
 	wg.Wait()
 	close(pc.resultChan)
 	collectorWg.Wait()
