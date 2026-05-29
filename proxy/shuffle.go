@@ -65,11 +65,9 @@ func SmartShuffleByServer(items []map[string]any, cfg ShuffleConfig) {
 					var record struct {
 						ASN uint32 `maxminddb:"autonomous_system_number"`
 					}
-					// v2 仅接收 1 个参数 (addr)，并返回 (result, error)
-					if result, err := asnDB.Lookup(addr); err == nil {
-						if decodeErr := result.Decode(&record); decodeErr == nil && record.ASN != 0 {
-							key += fmt.Sprintf("|as%d", record.ASN)
-						}
+					// v2 正确用法：第一个参数是 netip.Addr，第二个参数是结构体指针，只返回一个 error
+					if err := asnDB.Lookup(addr, &record); err == nil && record.ASN != 0 {
+						key += fmt.Sprintf("|as%d", record.ASN)
 					}
 				}
 			}
@@ -220,11 +218,10 @@ func parseServerMeta(s string) serverMeta {
 				var record struct {
 					ASN uint32 `maxminddb:"autonomous_system_number"`
 				}
-				if result, err := asnDB.Lookup(addr); err == nil {
-					if decodeErr := result.Decode(&record); decodeErr == nil && record.ASN != 0 {
-						m.asn = record.ASN
-						m.asnOK = true
-					}
+				// v2 正确用法：第一个参数是 netip.Addr，第二个参数是结构体指针，只返回一个 error
+				if err := asnDB.Lookup(addr, &record); err == nil && record.ASN != 0 {
+					m.asn = record.ASN
+					m.asnOK = true
 				}
 			}
 		}
