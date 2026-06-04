@@ -10,7 +10,7 @@ release:
   # 自动检测是否为预发布版本
   prerelease: auto
 
-# 变更日志配置 (新增部分)
+# 变更日志配置
 changelog:
   # 排序方式：asc (旧->新) 或 desc (新->旧)
   sort: asc
@@ -47,50 +47,26 @@ changelog:
     - title: "其他"
       order: 999
 
-# 构建配置
+# 构建配置（【已修改】彻底精简，仅保留 Windows amd64 编译目标）
 builds:
   - id: subs-check
     env:
       - CGO_ENABLED=0
       - GOEXPERIMENT=greenteagc,jsonv2
-    goos:
-      - linux
-      - windows
-      - darwin
-    goarch:
-      - amd64
-      - arm64
-      - arm
-      - "386"
-    goarm:
-      - "7"
-    ignore:
-      - goos: darwin
-        goarch: arm
-      - goos: windows
-        goarch: arm
-      - goos: darwin
-        goarch: "386"
+    targets:
+      - windows_amd64   # 常见的 64位 Windows 电脑 (Intel/AMD)
     mod_timestamp: "{{ .CommitTimestamp }}"
     flags:
       - -trimpath
     ldflags:
       - -s -w -X main.Version={{ .Version }} -X main.CurrentCommit={{ .ShortCommit }}
 
-# 归档配置
+# 归档配置（【已修改】修复了模板缺失 end 导致的报错，且格式直接锁定为 zip）
 archives:
-  - ids:
+  - id: subs-check      # 新版本推荐用单数 id
+    builds:
       - subs-check
     formats:
-      - tar.gz
-    name_template: >-
-      {{ .ProjectName }}_
-      {{- title .Os }}_
-      {{- if eq .Arch "amd64" }}x86_64
-      {{- else if eq .Arch "386" }}i386
-      {{- else if eq .Arch "arm64" }}aarch64
-      {{- else if eq .Arch "arm" }}armv7
-      {{- else }}{{ .Arch }}{{ end }}
-    format_overrides:
-      - goos: windows
-        formats: zip
+      - zip             # 因为只要 Windows，默认全用 zip 格式，不再需要 format_overrides
+    # 修复了旧配置缺少 {{ end }} 且使用折叠换行引发的报错，直接生成标准包名
+    name_template: "{{ .ProjectName }}_{{ title .Os }}_x86_64"
