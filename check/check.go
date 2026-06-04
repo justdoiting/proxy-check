@@ -32,9 +32,9 @@ import (
 
 // 对外暴露变量，兼容GUI调用
 var (
-	Progress       atomic.Uint32 // 已检测数量（语义见算法）
-	Available      atomic.Uint32 // 已可用数量（测速阶段完成,可用即+1）
-	ProxyCount     atomic.Uint32 // 总数（动态=总节点；分阶段=当前阶段规模）
+	Progress   atomic.Uint32 // 已检测数量（语义见算法）
+	Available  atomic.Uint32 // 已可用数量（测速阶段完成,可用即+1）
+	ProxyCount atomic.Uint32 // 总数（动态=总节点；分阶段=当前阶段规模）
 
 	TotalBytes     atomic.Uint64
 	ForceClose     atomic.Bool
@@ -46,8 +46,8 @@ var (
 
 // 存储测速和流媒体检测开关状态
 var (
-	speedON         bool
-	mediaON         bool
+	speedON        bool
+	mediaON        bool
 	progressWeight ProgressWeight
 )
 
@@ -105,7 +105,7 @@ type ProxyJob struct {
 
 	Speed int
 
-	NeedCF          bool
+	NeedCF         bool
 	IsCfAccessible bool
 }
 
@@ -148,6 +148,7 @@ func NewProxyChecker(proxyCount int) *ProxyChecker {
 	cMedia := config.GlobalConfig.MediaConcurrent
 
 	// 分别设置测活\测速\媒体检测阶段并发数
+	// 使用衰减算法,简单防呆设计
 	aliveConc := 0
 	speedConc := 0
 	mediaConc := 0
@@ -159,6 +160,7 @@ func NewProxyChecker(proxyCount int) *ProxyChecker {
 		mediaConc = min(cMedia, proxyCount)
 	} else {
 		// 自动模式
+		// 使用相对平滑的衰减方案
 		fnAlive := NewLogDecay(400, 0.005, 400)
 		fnMedia := NewExpDecay(400, 0.001, 100)
 		if !speedON {
@@ -177,6 +179,7 @@ func NewProxyChecker(proxyCount int) *ProxyChecker {
 	}
 
 	var speedChanLength int
+	// 测速阶段的缓冲通道不用太大,以形成阻塞,避免测活浪费资源
 	fnScLength := NewTanhDecay(100, 0.0004, float64(aliveConc))
 	speedChanLength = RoundInt(fnScLength(float64(speedConc)))
 	if !speedON {
@@ -239,32 +242,19 @@ func Check() ([]Result, error) {
 	// 设置之前成功的节点顺序在前
 	headSize := subWasSuccedLength + historyLength
 	if len(proxies) > headSize {
-		calcMinSpacing := max(config.GlobalConfig.Concurrent*10, len(proxies)/15)
+		// 假设有 15 个相似的ip
+		calcMinSpacing := max(config.GlobalConfig.Concurrent*8, len(proxies)/50)
 
+		// 随机乱序并根据 server 字段打乱节点顺序, 减少测速直接测死的概率
 		cfg := proxyutils.ShuffleConfig{
 			Threshold:  float64(config.GlobalConfig.Threshold), // CIDR/24 相同, 避免在一组(0.5: CIDR/16)
 			Passes:     5,                                      // 改善轮数（1~3）
 			MinSpacing: calcMinSpacing,                         // CIDR/24 相同, 设置最小间隔
-			ScanLimit:  calcMinSpacing * 3,                     // 冲突向前扫描的最大距离
+			ScanLimit:  config.GlobalConfig.Concurrent * 5,     // 冲突向前扫描的最大距离
 		}
 
-		// ==========================================================
-		// 🟢 核心修复：加载 ASN 数据库用于节点打乱（去除了 defer 释放隐患）
-		// ==========================================================
-		if config.GlobalConfig.MaxMindDBPath != "" {
-			if db, asnErr := assets.OpenASNDB(config.GlobalConfig.MaxMindDBPath); asnErr == nil {
-				proxyutils.SetASNDB(db)
-				slog.Info("✅ [ASN] 数据库加载成功，已激活基于 ASN 的智能打乱")
-			} else {
-				slog.Warn("⚠️ [ASN] 配置文件中指定了路径，但实际加载失败", "error", asnErr)
-			}
-		} else {
-			slog.Warn("ℹ️ [ASN] 未配置 MaxMindDBPath 路径，程序将跳过 ASN 维度打乱")
-		}
-		// ==========================================================
-
-		slog.Info("⚙️ [ASN] 正在调用 SmartShuffleByServer 开始对节点进行交错打乱...")
-		proxyutils.SmartShuffleByServer(proxies, cfg)
+		tail := proxies[headSize:]
+		proxyutils.SmartShuffleByServer(tail, cfg)
 
 		cidr := proxyutils.ThresholdToCIDR(cfg.Threshold)
 		slog.Info(fmt.Sprintf("节点乱序, 相同 CIDR%s 最小间距: %d", cidr, cfg.MinSpacing))
@@ -290,9 +280,11 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 		Bucket = ratelimit.NewBucketWithRate(float64(math.MaxInt64), int64(math.MaxInt64))
 	}
 
+	// // 初始化全局上下文
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// 如果 MaxMindDBPath 为空会自动使用 subs-check 内置数据库
 	geoDB, err := assets.OpenMaxMindDB(config.GlobalConfig.MaxMindDBPath)
 
 	if err != nil {
@@ -300,6 +292,7 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 		geoDB = nil
 	}
 
+	// 确保数据库在函数结束时关闭
 	if geoDB != nil {
 		defer func() {
 			if err := geoDB.Close(); err != nil {
@@ -317,6 +310,7 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 		"drop-bad-cf-nodes", config.GlobalConfig.DropBadCfNodes,
 	}
 
+	// 流水线并发参数
 	if config.GlobalConfig.AliveConcurrent <= 0 || config.GlobalConfig.SpeedConcurrent <= 0 || config.GlobalConfig.MediaConcurrent <= 0 {
 		args = append(args,
 			"auto-concurrent", true, "concurrent", config.GlobalConfig.Concurrent,
@@ -339,6 +333,7 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 			args = append(args, ":media", pc.mediaConcurrent)
 		}
 	}
+	// 只有在 >0 时才输出
 	if config.GlobalConfig.SuccessLimit > 0 {
 		args = append(args, "success-limit", config.GlobalConfig.SuccessLimit)
 	}
@@ -346,6 +341,7 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 		args = append(args, "total-speed-limit", config.GlobalConfig.TotalSpeedLimit)
 	}
 
+	// 再追加剩余参数
 	args = append(args,
 		"timeout", config.GlobalConfig.Timeout,
 	)
@@ -366,8 +362,10 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 		args = append(args, "sub-urls-stats", config.GlobalConfig.SubURLsStats)
 	}
 
+	// 最终日志调用
 	slog.Info("当前参数", args...)
 
+	// 监测 ForceClose
 	go func() {
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
@@ -385,6 +383,7 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 		}
 	}()
 
+	// 进度显示 —— 使用关闭信号并等待 showProgress 完成
 	doneCh := make(chan struct{})
 	finishedCh := make(chan struct{})
 
@@ -395,13 +394,18 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 		}()
 	}
 
+	// 启动流水线阶段
 	go pc.distributeJobs(proxies, ctx)
 	go pc.runAliveStage(ctx)
 	go pc.runSpeedStage(ctx, cancel)
 	pc.runMediaStageAndCollect(geoDB, ctx, cancel)
 
+	// 确保进度显示到 100% 再打印收尾日志
 	if config.GlobalConfig.PrintProgress {
+		// 收集工作已全部完成，调用 Finalize 强制将进度设置为 100%
 		pc.pt.Finalize()
+
+		// 关闭 done 通知 showProgress 打印最终状态并退出，然后等待其完全结束
 		close(doneCh)
 		<-finishedCh
 	}
@@ -410,37 +414,48 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 		slog.Info(fmt.Sprintf("达到成功节点数量限制 %d, 收集结果完成。", config.GlobalConfig.SuccessLimit))
 	}
 
+	// 标记检测完成，开始处理结果，保存，上传等
 	ProcessResults.Store(true)
+
+	// 检查订阅成功率并发出警告
 	pc.checkSubscriptionSuccessRate(proxies)
 
 	slog.Info(fmt.Sprintf("可用节点数量: %d", len(pc.results)))
 	slog.Info(fmt.Sprintf("测试总消耗流量: %.3fGB", float64(TotalBytes.Load())/1024/1024/1024))
 
+	// 手动解除引用
 	for i := range proxies {
 		proxies[i] = nil
 	}
 
+	// 在保存上传之前直接归还内存
 	debug.FreeOSMemory()
+
 	return pc.results, nil
 }
 
+// distributeJobs 分发代理任务
 func (pc *ProxyChecker) distributeJobs(proxies []map[string]any, ctx context.Context) {
 	defer close(pc.aliveChan)
 
 	concurrency := min(pc.proxyCount, pc.aliveConcurrent)
 	var wg sync.WaitGroup
 
+	// 使用原子索引来分发任务
 	var proxyIndex atomic.Int64
-	proxyIndex.Store(-1)
+	proxyIndex.Store(-1) // 初始化为 -1
 
+	// 定义主动 GC 的阈值
 	const gcThreshold = 200000
 
+	// 启动工作协程池
 	for range concurrency {
 		wg.Go(func() {
 			for {
+				// 原子地获取下一个代理索引
 				index := proxyIndex.Add(1)
 				if index >= int64(len(proxies)) {
-					return
+					return // 所有代理都已处理完毕
 				}
 
 				if checkCtxDone(ctx) {
@@ -448,9 +463,16 @@ func (pc *ProxyChecker) distributeJobs(proxies []map[string]any, ctx context.Con
 				}
 
 				mapping := proxies[index]
+
+				// 任务取出后，立即断开源切片的引用
+				// 此时，如果 mapping 没被后续 CreateClient 引用，它就是垃圾；
+				// 如果 mapping 被传给了 Client，等 Job.Close() 时它也会变成垃圾。
 				proxies[index] = nil
 
+				// 周期性强制归还内存
+				// 只有当索引达到阈值倍数时触发
 				if index > 0 && index%gcThreshold == 0 {
+					// 异步执行，尽量不阻塞分发，但在 CPU 极高时可能会有些许延迟
 					go func(currentIdx int64) {
 						slog.Debug(fmt.Sprintf("已处理 %d 个节点，正在执行主动内存回收...", currentIdx))
 						debug.FreeOSMemory()
@@ -459,6 +481,7 @@ func (pc *ProxyChecker) distributeJobs(proxies []map[string]any, ctx context.Con
 
 				cli := CreateClient(mapping)
 				if cli == nil {
+					// 创建失败：视为 alive 完成（失败），不进入 speed/media
 					pc.pt.CountAlive(false)
 					continue
 				}
@@ -470,6 +493,7 @@ func (pc *ProxyChecker) distributeJobs(proxies []map[string]any, ctx context.Con
 				job.NeedCF = config.GlobalConfig.DropBadCfNodes ||
 					(config.GlobalConfig.MediaCheck && needsCF(config.GlobalConfig.Platforms))
 
+				// 当 aliveChan 满时会阻塞
 				select {
 				case pc.aliveChan <- job:
 				case <-ctx.Done():
@@ -480,11 +504,15 @@ func (pc *ProxyChecker) distributeJobs(proxies []map[string]any, ctx context.Con
 		})
 	}
 
+	// 等待所有工作协程完成
 	wg.Wait()
+	// 分发结束，再次强制清理（此时 proxies 切片虽然 length 很大，但全是 nil）
 	debug.FreeOSMemory()
 }
 
+// 测活
 func (pc *ProxyChecker) runAliveStage(ctx context.Context) {
+	// 根据是否启用测速，延迟关闭下一个阶段的通道。
 	if speedON {
 		defer close(pc.speedChan)
 	} else {
@@ -503,20 +531,24 @@ func (pc *ProxyChecker) runAliveStage(ctx context.Context) {
 					job.Close()
 					continue
 				}
+				// 节点测活
 				isAlive := checkAlive(job)
 
 				if !isAlive {
+					// 记录非存活
 					if job.aliveMarked.CompareAndSwap(false, true) {
 						pc.pt.CountAlive(false)
 					}
 					job.Close()
-					continue
+					continue // 不进入 speed/media
 				}
 
+				// CF 过滤
 				if job.NeedCF {
 					job.IsCfAccessible, job.CfLoc, job.CfIP = platform.CheckCloudflare(job.Client.Client)
 					if config.GlobalConfig.DropBadCfNodes && !job.IsCfAccessible {
 						job.Close()
+						// 记录丢弃
 						if job.aliveMarked.CompareAndSwap(false, true) {
 							pc.pt.CountAlive(false)
 						}
@@ -524,17 +556,21 @@ func (pc *ProxyChecker) runAliveStage(ctx context.Context) {
 					}
 				}
 
+				// 记录存活
 				if job.aliveMarked.CompareAndSwap(false, true) {
 					pc.pt.CountAlive(true)
 				}
 
+				// 流转
 				if speedON {
 					select {
 					case pc.speedChan <- job:
+
 					case <-ctx.Done():
 						job.Close()
 					}
 				} else {
+					// 无测速时：通过 alive 即可视为“可用”，确保 Available 与最终可用数量一致
 					if job.speedMarked.CompareAndSwap(false, true) {
 						pc.incrementAvailable()
 					}
@@ -548,16 +584,21 @@ func (pc *ProxyChecker) runAliveStage(ctx context.Context) {
 		})
 	}
 	wg.Wait()
+
+	// alive 阶段闭合：分阶段算法据此确定下一阶段规模
 	pc.pt.FinishAliveStage()
 }
 
+// 测速
 func (pc *ProxyChecker) runSpeedStage(ctx context.Context, cancel context.CancelFunc) {
 	if !speedON {
 		return
 	}
 	defer close(pc.mediaChan)
 
+	// 确保达到成功节点数量限制的日志只输出一次
 	var stopOnce sync.Once
+
 	var wg sync.WaitGroup
 	concurrency := pc.speedConcurrent
 
@@ -573,6 +614,7 @@ func (pc *ProxyChecker) runSpeedStage(ctx context.Context, cancel context.Cancel
 				success := err == nil && speed >= config.GlobalConfig.MinSpeed
 				if job.speedMarked.CompareAndSwap(false, true) {
 					pc.pt.CountSpeed(success)
+					// 仅在测速成功时计入可用数量
 					if success {
 						pc.incrementAvailable()
 					}
@@ -604,18 +646,23 @@ func (pc *ProxyChecker) runSpeedStage(ctx context.Context, cancel context.Cancel
 								slog.Warn(fmt.Sprintf("达到成功节点数量限制 %d, 等待节点重命名任务完成...", config.GlobalConfig.SuccessLimit))
 							}
 						}
+
 						cancel()
 					})
 				}
 
+				// 流转
 				pc.mediaChan <- job
 			}
 		})
 	}
 	wg.Wait()
+
+	// speed 阶段闭合：分阶段算法据此确定媒体阶段规模
 	pc.pt.FinishSpeedStage()
 }
 
+// 流媒体检测 + 收集结果
 func (pc *ProxyChecker) runMediaStageAndCollect(db *maxminddb.Reader, ctx context.Context, cancel context.CancelFunc) {
 	var wg sync.WaitGroup
 	resultLength := pc.mediaConcurrent
@@ -624,23 +671,30 @@ func (pc *ProxyChecker) runMediaStageAndCollect(db *maxminddb.Reader, ctx contex
 	}
 
 	pc.resultChan = make(chan Result, resultLength)
+
+	// 设置成功数量限制
 	var stopOnce sync.Once
 
+	// 收集结果
 	var collectorWg sync.WaitGroup
 	collectorWg.Go(func() {
 		pc.collectResults()
 	})
 
+	// 启动 workers（确保 collector 已启动以避免阻塞在无缓冲时）
 	concurrency := pc.mediaConcurrent
 	for range concurrency {
 		wg.Go(func() {
 			for job := range pc.mediaChan {
 				if !speedON {
+					// 只在没开启测速时接受媒体检测停止信号
+					// 丢弃结果
 					if checkCtxDone(ctx) {
 						job.Close()
 						continue
 					}
 
+					// 设置成功数量限制
 					if config.GlobalConfig.SuccessLimit > 0 && pc.available.Load() >= config.GlobalConfig.SuccessLimit {
 						stopOnce.Do(func() {
 							Successlimited.Store(true)
@@ -654,6 +708,7 @@ func (pc *ProxyChecker) runMediaStageAndCollect(db *maxminddb.Reader, ctx contex
 								slog.Warn(fmt.Sprintf("达到成功节点数量限制 %d, 等待节点重命名任务完成...", config.GlobalConfig.SuccessLimit))
 								slog.Warn("测活模式将丢弃多余结果")
 							}
+
 							cancel()
 						})
 					}
@@ -666,6 +721,8 @@ func (pc *ProxyChecker) runMediaStageAndCollect(db *maxminddb.Reader, ctx contex
 				}
 
 				pc.updateProxyName(&job.Result, job.Client, job.Speed, db, job.CfLoc, job.CfIP, ctx)
+
+				// 将结果发送到 collector
 				pc.resultChan <- job.Result
 
 				if job.mediaMarked.CompareAndSwap(false, true) {
@@ -677,18 +734,23 @@ func (pc *ProxyChecker) runMediaStageAndCollect(db *maxminddb.Reader, ctx contex
 		})
 	}
 
+	// 等待所有 worker 完成，再关闭 pc.resultChan，让 collector 退出
 	wg.Wait()
 	close(pc.resultChan)
 	collectorWg.Wait()
+
+	// 最后一次刷新并返回收集结果
 	pc.pt.refresh()
 }
 
+// collectResults 收集检测结果
 func (pc *ProxyChecker) collectResults() {
 	for result := range pc.resultChan {
 		pc.results = append(pc.results, result)
 	}
 }
 
+// checkAlive 使用谷歌服务执行基本的存活检测。
 func checkAlive(job *ProxyJob) bool {
 	gstatic, err := platform.CheckGstatic(job.Client.Client)
 	if err == nil && gstatic {
@@ -697,6 +759,7 @@ func checkAlive(job *ProxyJob) bool {
 	return false
 }
 
+// needsCF 判断所选的媒体检测平台是否需要Cloudflare访问权限。
 func needsCF(platforms []string) bool {
 	for _, p := range platforms {
 		if p == "openai" || p == "x" {
@@ -706,6 +769,7 @@ func needsCF(platforms []string) bool {
 	return false
 }
 
+// mediaCheck 根据平台类型分发到相应的检测函数。
 func mediaCheck(job *ProxyJob, plat string, db *maxminddb.Reader, ctx context.Context) {
 	switch plat {
 	case "x":
@@ -754,12 +818,15 @@ func mediaCheck(job *ProxyJob, plat string, db *maxminddb.Reader, ctx context.Co
 		if risk, err := platform.CheckIPRisk(job.Client.Client, ip); err == nil {
 			job.Result.IPRisk = risk
 		} else {
+			// 失败的可能性高，所以放上日志
 			slog.Debug(fmt.Sprintf("查询IP风险失败: %v", err))
 		}
 	}
 }
 
-func pc_updateProxyName(res *Result, httpClient *ProxyClient, speed int, db *maxminddb.Reader, cfLoc string, cfIP string, jctx context.Context) {
+// updateProxyName 更新代理名称
+func (pc *ProxyChecker) updateProxyName(res *Result, httpClient *ProxyClient, speed int, db *maxminddb.Reader, cfLoc string, cfIP string, jctx context.Context) {
+	// 以节点IP查询位置重命名（如果开启）
 	if config.GlobalConfig.RenameNode {
 		if res.Country == "" {
 			country, _, countryCodeTag, _ := proxyutils.GetProxyCountry(httpClient.Client, db, jctx, cfLoc, cfIP)
@@ -780,6 +847,7 @@ func pc_updateProxyName(res *Result, httpClient *ProxyClient, speed int, db *max
 	}
 
 	var tags []string
+	// 速度标签
 	if config.GlobalConfig.SpeedTestURL != "" && speed > 0 {
 		var speedStr string
 		if speed < 100 {
@@ -791,9 +859,11 @@ func pc_updateProxyName(res *Result, httpClient *ProxyClient, speed int, db *max
 	}
 
 	if config.GlobalConfig.MediaCheck {
+		// 移除旧标签
 		name = regexp.MustCompile(`\s*\|(?:NF|D\+|GPT⁺|GPT|GM|X|YT|KeepSucced|KeepHistory|KeepSuccess|YT-[^|]+|TK|TK-[^|]+|\d+%)`).ReplaceAllString(name, "")
 	}
 
+	// 平台标签（按用户配置顺序）
 	for _, plat := range config.GlobalConfig.Platforms {
 		switch plat {
 		case "openai":
@@ -824,6 +894,7 @@ func pc_updateProxyName(res *Result, httpClient *ProxyClient, speed int, db *max
 			}
 		case "youtube":
 			if res.Youtube != "" {
+				// 只有YouTube地区和节点位置不一致时才添加YouTube地区
 				if res.Country != res.Youtube {
 					tags = append(tags, fmt.Sprintf("YT-%s", res.Youtube))
 				} else {
@@ -832,6 +903,7 @@ func pc_updateProxyName(res *Result, httpClient *ProxyClient, speed int, db *max
 			}
 		case "tiktok":
 			if res.TikTok != "" {
+				// 只有TikTok地区和节点位置不一致时才添加TikTok地区
 				if res.Country != res.TikTok {
 					tags = append(tags, fmt.Sprintf("TK-%s", res.TikTok))
 				} else {
@@ -845,6 +917,7 @@ func pc_updateProxyName(res *Result, httpClient *ProxyClient, speed int, db *max
 		tags = append(tags, tag)
 	}
 
+	// 运营商标签
 	if config.GlobalConfig.ISPCheck {
 		ISPTag := proxyutils.GetISPInfo(httpClient.Client)
 		if ISPTag != "" {
@@ -852,6 +925,7 @@ func pc_updateProxyName(res *Result, httpClient *ProxyClient, speed int, db *max
 		}
 	}
 
+	// 将所有标记添加到名称中
 	if len(tags) > 0 {
 		name += "|" + strings.Join(tags, "|")
 	}
@@ -859,16 +933,15 @@ func pc_updateProxyName(res *Result, httpClient *ProxyClient, speed int, db *max
 	res.Proxy["name"] = name
 }
 
-func (pc *ProxyChecker) updateProxyName(res *Result, httpClient *ProxyClient, speed int, db *maxminddb.Reader, cfLoc string, cfIP string, jctx context.Context) {
-	pc_updateProxyName(res, httpClient, speed, db, cfLoc, cfIP, jctx)
-}
-
+// checkSubscriptionSuccessRate 检查订阅成功率并发出警告
 func (pc *ProxyChecker) checkSubscriptionSuccessRate(allProxies []map[string]any) {
+	// 统计每个订阅的节点总数和成功数
 	subStats := make(map[string]struct {
 		total   int
 		success int
 	})
 
+	// 统计所有节点的订阅来源
 	for _, proxy := range allProxies {
 		if subURL, ok := proxy["sub_url"].(string); ok {
 			stats := subStats[subURL]
@@ -877,6 +950,7 @@ func (pc *ProxyChecker) checkSubscriptionSuccessRate(allProxies []map[string]any
 		}
 	}
 
+	// 统计成功节点的订阅来源
 	for _, result := range pc.results {
 		if result.Proxy != nil {
 			if subURL, ok := result.Proxy["sub_url"].(string); ok {
@@ -889,10 +963,12 @@ func (pc *ProxyChecker) checkSubscriptionSuccessRate(allProxies []map[string]any
 		}
 	}
 
+	// 检查成功率并发出警告
 	for subURL, stats := range subStats {
 		if stats.total > 0 {
 			successRate := float32(stats.success) / float32(stats.total)
 
+			// 如果成功率低于x，发出警告
 			if successRate < config.GlobalConfig.SuccessRate {
 				slog.Warn(fmt.Sprintf("订阅成功率过低: %s", subURL),
 					"总节点数", stats.total,
@@ -907,6 +983,9 @@ func (pc *ProxyChecker) checkSubscriptionSuccessRate(allProxies []map[string]any
 		}
 	}
 
+	// 根据用户配置，过滤出成功率>0的订阅并保存两个文件：
+	// 1) 仅包含URL列表：subs-filtered.yaml
+	// 2) 包含URL与成功率的统计：subs-filtered-stats.yaml（按成功率降序）
 	if config.GlobalConfig.SubURLsStats {
 		type pair struct {
 			URL     string
@@ -926,19 +1005,25 @@ func (pc *ProxyChecker) checkSubscriptionSuccessRate(allProxies []map[string]any
 			pairs = append(pairs, pair{URL: u, Rate: r, Total: st.total, Success: st.success})
 		}
 
+		// 排序：按成功率降序，再按URL升序
 		slices.SortFunc(pairs, func(a, b pair) int {
+			// 先按成功率降序 (b - a)
 			if n := cmpFloat(b.Rate, a.Rate); n != 0 {
 				return n
 			}
+			// 再按URL升序 (a - b)
 			return strings.Compare(a.URL, b.URL)
 		})
 
+		// URL 列表保存为标准 YAML 数组
 		if data, err := yaml.Marshal(filtered); err != nil {
 			slog.Warn("序列化过滤后的订阅链接失败", "err", err)
 		} else if err := method.SaveToStats(data, "subs-filtered.yaml"); err != nil {
 			slog.Warn("保存过滤后的订阅链接失败", "err", err)
 		}
 
+		// 统计文件：每行一个条目，列表中为单键映射：- "<url>": <rate>
+		// rate 保留4位小数，便于人眼阅读与程序解析
 		var sb strings.Builder
 		for _, p := range pairs {
 			fmt.Fprintf(&sb, "- %q: %d/%d (%.3f%%)\n", p.URL, p.Success, p.Total, p.Rate*100)
@@ -967,17 +1052,22 @@ type ProxyClient struct {
 	mProxy    constant.Proxy
 }
 
+// CreateClient 创建独立的代理客户端
 func CreateClient(mapping map[string]any) *ProxyClient {
 	pc := &ProxyClient{}
+
 	var err error
 
+	// 解析代理
 	pc.mProxy, err = adapter.ParseProxy(mapping)
 	if err != nil {
 		slog.Debug(fmt.Sprintf("底层mihomo创建代理Client失败: %v", err))
 		return nil
 	}
 
+	// 初始化全局控制 Context
 	pc.ctx, pc.cancel = context.WithCancel(context.Background())
+	// 捕获 ctx 用于闭包，防止 pc 指针后续变化（防御性，避免某次测试出现的nil指针错误）
 	clientCtx := pc.ctx
 
 	statsTransport := &StatsTransport{}
@@ -986,10 +1076,19 @@ func CreateClient(mapping map[string]any) *ProxyClient {
 
 	baseTransport = &http.Transport{
 		DialContext: func(reqCtx context.Context, network, addr string) (net.Conn, error) {
+			// 基于请求的 ctx 创建合并 ctx
 			mergedCtx, mergedCancel := context.WithCancel(reqCtx)
+
+			// 使用 context.AfterFunc 监听全局 clientCtx
+			// 当 clientCtx (ProxyClient) 被关闭时，立即调用 mergedCancel
 			stop := context.AfterFunc(clientCtx, func() {
 				mergedCancel()
 			})
+
+			// 资源清理
+			// 无论拨号成功还是失败，函数返回时：
+			// 1. stop(): 注销监听器，避免 mergedCtx 长期持有 clientCtx 的引用
+			// 2. mergedCancel(): 释放 mergedCtx 资源
 			defer stop()
 			defer mergedCancel()
 
@@ -1002,6 +1101,7 @@ func CreateClient(mapping map[string]any) *ProxyClient {
 				u16Port = uint16(port)
 			}
 
+			// 使用合并后的 ctx 进行拨号
 			rawConn, err := pc.mProxy.DialContext(mergedCtx, &constant.Metadata{
 				Host:    host,
 				DstPort: u16Port,
@@ -1023,6 +1123,7 @@ func CreateClient(mapping map[string]any) *ProxyClient {
 		MaxIdleConnsPerHost: 5,
 	}
 
+	// HTTP/2 判断
 	if baseTransport.ForceAttemptHTTP2 || len(baseTransport.TLSNextProto) > 0 {
 		networkLimitDefault = false
 	}
@@ -1038,35 +1139,53 @@ func CreateClient(mapping map[string]any) *ProxyClient {
 	return pc
 }
 
+// Close 关闭客户端，释放所有资源
 func (pc *ProxyClient) Close() {
+	// 防御性检查：防止对 nil 指针调用 Close
 	if pc == nil {
 		return
 	}
+
+	// 发送取消信号
+	// 这会立即触发 CreateClient 中 context.AfterFunc 注册的回调，
+	// 从而中断所有正在进行的 Dial 过程。
 	if pc.cancel != nil {
 		pc.cancel()
 	}
+
+	// 关闭mihomo代理实例
 	if pc.mProxy != nil {
 		pc.mProxy.Close()
 	}
+
+	// 关闭 HTTP 连接池
+	// 这里无法关闭mihomo建立的连接
 	if pc.Client != nil {
 		pc.Client.CloseIdleConnections()
 	}
+
+	// 统计数据
 	if pc.Transport != nil {
 		bytesRead := pc.Transport.BytesRead.Load()
+
 		if bytesRead > 0 {
 			TotalBytes.Add(bytesRead)
 		}
+
 		if pc.Transport.Base != nil {
+			// 关闭mihomo连接，mihomo的bug？有时间去看一下mihomo代码
 			pc.Transport.Base.CloseIdleConnections()
 		}
 	}
 }
 
+// countingReadCloser 封装了 io.ReadCloser，用于统计读取的字节数。
 type countingReadCloser struct {
 	io.ReadCloser
 	counter *atomic.Uint64
 }
 
+// Read 为 countingReadCloser 实现 io.Reader 接口。
 func (c *countingReadCloser) Read(p []byte) (int, error) {
 	n, err := c.ReadCloser.Read(p)
 	if n > 0 {
@@ -1075,16 +1194,19 @@ func (c *countingReadCloser) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// StatsTransport 是一个 http.RoundTripper 的封装，用于统计从响应体中读取的字节数。
 type StatsTransport struct {
 	Base         *http.Transport
 	BytesRead    atomic.Uint64
 	BytesWritten atomic.Uint64
 }
 
+// RoundTrip 为 StatsTransport 实现 http.RoundTripper 接口。
 func (s *StatsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return s.Base.RoundTrip(req)
 }
 
+// countingConn 包裹 net.Conn，在网络连接层统计读/写字节数。
 type countingConn struct {
 	net.Conn
 	readCounter  *atomic.Uint64
@@ -1096,6 +1218,7 @@ func (c *countingConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
 	if n > 0 {
 		c.readCounter.Add(uint64(n))
+		// 在连接层消耗 token
 		if Bucket != nil && c.networkLimit {
 			Bucket.Wait(int64(n))
 		}
@@ -1111,11 +1234,13 @@ func (c *countingConn) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// 工具函数
 func (pc *ProxyChecker) incrementAvailable() {
 	pc.available.Add(1)
 	Available.Add(1)
 }
 
+// checkCtxDone 提供一个非阻塞的检查，判断上下文是否已结束或是否收到强制关闭信号。
 func checkCtxDone(c context.Context) bool {
 	if ForceClose.Load() {
 		return true
