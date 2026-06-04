@@ -46,7 +46,7 @@ concurrent: 20
 # 保存几个成功的节点，为0代表不限制
 # 如果你的并发数量超过这个参数，那么成功的结果可能会大于这个数值
 # success-limit <= success <= success-limit+concurrent
-success-limit: 60
+success-limit: 15
 
 # 此选项将保存并加载 {上次检测成功的节点} 和 {历次检测成功的节点}
 # 如果为true，则保留之前测试成功的节点
@@ -59,7 +59,7 @@ keep-success-proxies: true
 # 注意: 节点可能被测速测死(暂时或永久), 经过多次测试, 不用怀疑!
 # 强烈建议设置较低的 min-speed, 强烈建议保留 download-timeout 和 download-mb
 # 最低测速结果舍弃(KB/s)
-min-speed: 1111
+min-speed: 1234
 # 下载测试时间(s)(与下载链接大小相关，默认最大测试10s)
 download-timeout: 10
 # 单节点测速下载数据大小(MB)限制，0为不限
@@ -76,7 +76,7 @@ total-speed-limit: 6
 # (留空关闭测速，如节点数量少，网络环境差，请确保测速功能关闭)
 # 建议在深夜、早上、下午等空闲时段检测，避开网络拥堵的晚高峰
 # 出口水管就那么大，运营商只能优先保障直播、影视和游戏之类的正常流量
-speed-test-url: "https://github.com/ClashrAuto/Clashr-Auto-Desktop/releases/download/v2.5.7/Clash.Auto-amd64-2.5.7-win.zip"
+speed-test-url: "random"
 
 # 相似度阈值(Threshold)大致对应网段
 # 1.00 /32（完全相同 IP）
